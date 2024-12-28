@@ -24,10 +24,11 @@ Module.register("MMM-Ring", {
     ring2faRefreshToken: undefined,
     ringMinutesToStreamVideo: 1.5,
     ringVideoWidth: "600",
-    muted: false
+    muted: false,
   },
 
-  start: function() {
+  start: function () {
+    console.log("MMM-Ring: Starting module")
     this.errorMessage = "";
     this.displayType = this.DisplayTypes.NONE;
     this.hls = "";
@@ -57,19 +58,20 @@ Module.register("MMM-Ring", {
     }
 
     this.sendSocketNotification("BEGIN_RING_MONITORING", this.config);
+    console.log("MMM-Ring: Started ok")
   },
 
-  getScripts: function() {
+  getScripts: function () {
     return ["https://cdn.jsdelivr.net/npm/hls.js"];
   },
 
-  getStyles: function() {
+  getStyles: function () {
     return ["MMM-Ring.css"];
   },
 
   requiresVersion: "2.1.0", // Required version of MagicMirror
 
-  getDom: function() {
+  getDom: function () {
     if (this.hls) {
       this.hls.destroy();
       this.hls = null;
@@ -101,7 +103,7 @@ Module.register("MMM-Ring", {
           var hls = new Hls(config);
           this.hls = hls;
 
-          hls.on(Hls.Events.ERROR, function(event, data) {
+          hls.on(Hls.Events.ERROR, function (event, data) {
             var errorType = data.type;
             var errorDetails = data.details;
             var errorFatal = data.fatal;
@@ -112,15 +114,16 @@ Module.register("MMM-Ring", {
 
           hls.attachMedia(video);
 
-          hls.on(Hls.Events.MEDIA_ATTACHED, function() {
+          hls.on(Hls.Events.MEDIA_ATTACHED, function () {
             hls.loadSource(streamPath);
-            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+            hls.on(Hls.Events.MANIFEST_PARSED, function () {
+              video.muted = true; // need to mute to be able to autoplay
               video.play();
             });
           });
         } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
           video.src = streamPath;
-          video.addEventListener("loadedmetadata", function() {
+          video.addEventListener("loadedmetadata", function () {
             video.play();
           });
         }
@@ -129,7 +132,23 @@ Module.register("MMM-Ring", {
     }
   },
 
-  socketNotificationReceived: function(notification, payload) {
+  // From MMM-Remote-Control
+  notificationReceived: function (notification, payload, sender) {
+    switch (notification) {
+      case "BEGIN_RING_MONITORING":
+      case "RING_DOORBELL_START_STREAM":
+      case "RING_DOORBELL_CLEAR_STATE":
+        console.log(`MMM-Ring: received a notification: ${notification} - Payload: ${payload}`)
+        this.sendSocketNotification(notification, payload);
+        break;
+    }
+  },
+
+
+  socketNotificationReceived: function (notification, payload) {
+
+    console.log(`MMM-Ring: received socket notification: ${notification}`)
+
     switch (notification) {
       case "DISPLAY_ERROR":
         this.displayType = this.DisplayTypes.ERROR;

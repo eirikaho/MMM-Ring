@@ -31,6 +31,7 @@ module.exports = NodeHelper.create({
     this.audioPlaylistFile = "stream.m3u8";
     this.sipSession = null;
     this.sessionRunning = false;
+    this.cameras = []
   },
 
   stop: function () {
@@ -47,18 +48,47 @@ module.exports = NodeHelper.create({
 
   socketNotificationReceived: async function (notification, payload) {
     if (notification === "BEGIN_RING_MONITORING") {
+      this.toLog(`beginning ring monitoring`)
       this.config = payload;
 
+
+      this.toLog(`Attempting to use token from env file at '${this.envFile}'`)
       if (!(await util.promisify(fs.exists)(this.envFile))) {
         await util.promisify(fs.writeFile)(
           this.envFile,
           `RING_2FA_REFRESH_TOKEN=${this.config.ring2faRefreshToken}`
         );
+        this.toLog(`Using refresh token from config`)
+      } else {
+        this.toLog(`Using existing refresh token from env file`)
       }
+
 
       require("dotenv").config({ path: this.envFile });
 
+      this.toLog(`loaded token: ${process.env.RING_2FA_REFRESH_TOKEN}`)
       this.monitorRingActivity();
+    }
+    if (notification === "RING_DOORBELL_START_STREAM") {
+      if (!this.cameras) {
+        this.toLog("No loaded cameras");
+        return;
+      }
+      for (const camera of this.cameras) {
+        if (camera.id.toString() === payload) {
+          this.toLog(`Attempting session start (on-demand) for camera: ${camera.name}:${camera.id.toString()}`);
+          this.startSession(camera, "on-demand")
+        }
+      }
+    }
+    if (notification === "RING_DOORBELL_CLEAR_STATE") {
+      this.toLog("Clearing state")
+      if (this.sipSession) {
+        this.sipSession.stop();
+      }
+      this.sipSession = null
+      this.sessionRunning = false
+      this.cleanUpVideoStreamDirectory();
     }
   },
 
@@ -146,7 +176,9 @@ module.exports = NodeHelper.create({
     }
 
     // Start listening for doorbell presses on each camera
+    this.cameras = [];
     allCameras.forEach((camera) => {
+      this.cameras.push(camera)
       camera.onDoorbellPressed.subscribe(async () => {
         if (!this.sipSession) {
           await this.startSession(camera, "ring");
@@ -154,7 +186,7 @@ module.exports = NodeHelper.create({
       });
       this.toLog(`Actively listening for doorbell presses`);
       //Check config value if node app should stream motion
-      if(this.config.ringStreamMotion){
+      if (this.config.ringStreamMotion) {
         camera.onMotionDetected.subscribe(async (newMotion) => {
           //NewMotion is a true false value indicating whether the motion is new based on the dings made in the last 65 seconds
           // This prevents the stream from being triggered on startup because it would not be an active motion event.
@@ -164,10 +196,10 @@ module.exports = NodeHelper.create({
         });
         this.toLog(`Actively listening for Motion events`);
       }
-      
+
     });
 
-    
+
   },
 
   startSession: async function (camera, type) {
@@ -175,20 +207,25 @@ module.exports = NodeHelper.create({
       return;
     }
 
+    this.toLog(`starting session (type: ${type})`)
+
     this.sessionRunning = true;
-    if(type === "ring"){
+    if (type === "ring") {
       this.toLog(`${camera.name} had its doorbell rung! Preparing video stream.`);
-    }else if(type === "motion"){
+    } else if (type === "motion") {
       this.toLog(`${camera.name} has sensed motion Preparing video stream.`);
-    }else{
-      this.toLog(`${camera.name} been summoned by something other than a ring or motion. (spooky) Preparing video stream.`); 
+    } else if (type === "on-demand") {
+      this.toLog(`${camera.name} has received a streaming request on demand.`);
+    } else {
+      this.toLog(`${camera.name} been summoned by something other than a ring or motion. (spooky) Preparing video stream.`);
     }
-    
+
 
     await this.cleanUpVideoStreamDirectory();
     this.watchForStreamStarted();
 
-    const streamTimeOut = this.config.ringMinutesToStreamVideo * 60 * 1000;
+    const streamTimeOut = 2 * 60 * 1000;
+    this.toLog(`Setting timeout to ${streamTimeOut} ms`)
     this.sipSession = await camera.streamVideo({
       output: [
         "-preset",
